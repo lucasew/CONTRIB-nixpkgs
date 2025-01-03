@@ -12,13 +12,14 @@
   ragel,
   yasm,
   zlib,
+  gitUpdater,
   cudaSupport ? config.cudaSupport,
   cudaPackages ? { },
   llvmPackages_12,
   pythonSupport ? false,
 }:
 let
-  inherit (llvmPackages) stdenv;
+  stdenv = if cudaSupport then cudaPackages.backendStdenv else llvmPackages.stdenv;
 in
 
 stdenv.mkDerivation (finalAttrs: {
@@ -28,7 +29,7 @@ stdenv.mkDerivation (finalAttrs: {
   src = fetchFromGitHub {
     owner = "catboost";
     repo = "catboost";
-    rev = "refs/tags/v${finalAttrs.version}";
+    tag = "v${finalAttrs.version}";
     hash = "sha256-I3geFdVQ1Pm61eRXi+ueaxel3QRb8EJV9f4zV2Q7kk4=";
   };
 
@@ -68,12 +69,9 @@ stdenv.mkDerivation (finalAttrs: {
     ++ lib.optionals stdenv.hostPlatform.isDarwin [
       cctools
     ]
-    ++ lib.optionals cudaSupport (
-      with cudaPackages;
-      [
-        cuda_nvcc
-      ]
-    );
+    ++ lib.optionals cudaSupport [
+      cudaPackages.cuda_nvcc
+    ];
 
   buildInputs =
     [
@@ -83,14 +81,11 @@ stdenv.mkDerivation (finalAttrs: {
     ++ lib.optionals stdenv.hostPlatform.isDarwin [
       libiconv
     ]
-    ++ lib.optionals cudaSupport (
-      with cudaPackages;
-      [
-        cuda_cudart
-        cuda_cccl
-        libcublas
-      ]
-    );
+    ++ lib.optionals cudaSupport [
+      cudaPackages.cuda_cudart
+      cudaPackages.cuda_cccl
+      cudaPackages.libcublas
+    ];
 
   env = {
     PROGRAM_VERSION = finalAttrs.version;
@@ -101,12 +96,22 @@ stdenv.mkDerivation (finalAttrs: {
     CUDAHOSTCXX = lib.optionalString cudaSupport "${llvmPackages_12.stdenv.cc}/bin/cc";
     NIX_CFLAGS_LINK = lib.optionalString stdenv.hostPlatform.isLinux "-fuse-ld=lld";
     NIX_LDFLAGS = "-lc -lm";
+    NIX_CFLAGS_COMPILE = toString (
+      lib.optionals stdenv.cc.isClang [
+        "-Wno-error=missing-template-arg-list-after-template-kw"
+      ]
+    );
   };
 
   cmakeFlags = [
     (lib.cmakeFeature "CMAKE_BINARY_DIR" "$out")
     (lib.cmakeBool "CMAKE_POSITION_INDEPENDENT_CODE" true)
-    (lib.cmakeFeature "CATBOOST_COMPONENTS" "app;libs${lib.optionalString pythonSupport ";python-package"}")
+    (lib.cmakeFeature "CATBOOST_COMPONENTS" (
+      (lib.concatStringsSep ";" (
+        ["app" "libs"]
+        ++ lib.optional pythonSupport "python-package"
+      ))
+    ))
     (lib.cmakeBool "HAVE_CUDA" cudaSupport)
   ];
 
@@ -123,7 +128,9 @@ stdenv.mkDerivation (finalAttrs: {
     runHook postInstall
   '';
 
-  meta = with lib; {
+  passthru.updateScript = gitUpdater { rev-prefix = "v"; };
+
+  meta = {
     description = "High-performance library for gradient boosting on decision trees";
     longDescription = ''
       A fast, scalable, high performance Gradient Boosting on Decision Trees
@@ -131,10 +138,10 @@ stdenv.mkDerivation (finalAttrs: {
       learning tasks for Python, R, Java, C++. Supports computation on CPU and GPU.
     '';
     changelog = "https://github.com/catboost/catboost/releases/tag/v${finalAttrs.version}";
-    license = licenses.asl20;
-    platforms = platforms.unix;
+    license = lib.licenses.asl20;
+    platforms = lib.platforms.unix;
     homepage = "https://catboost.ai";
-    maintainers = with maintainers; [
+    maintainers = with lib.maintainers; [
       PlushBeaver
       natsukium
     ];
